@@ -1,0 +1,147 @@
+#!/bin/bash
+
+# Define the full backup day (1=Monday, 2=Tuesday, ..., 7=Sunday)
+FULL_BACKUP_DAY=1
+MYSQL_HOST=localhost
+MYSQL_PORT=3306
+
+BACKCMD=mariabackup
+GZIPCMD=pigz  # pigz (a parallel implementation of gzip)
+STREAMCMD=mbstream
+BACKUP_DIR=""
+ARGS="--parallel=2 --galera-info"
+USEROPTIONS="--host=${MYSQL_HOST} --port=${MYSQL_PORT}"
+
+# Get the hostname of the machine
+hostname=$(hostname)
+
+# Function to generate a default full backup day for this hostname
+reduce_to_1_to_7() {
+  local input=$1
+
+  # Extract digits from the string
+  local digits=$(echo "$input" | grep -o '[0-9]')
+
+  # Check if there are any digits found
+  if [ -z "$digits" ]; then
+    digits=$RANDOM
+    echo $((digits % 7 + 1))
+    return
+  fi
+
+  # Sum the digits
+  local sum=0
+  for digit in $digits; do
+    sum=$((sum + digit))
+  done
+
+  # Reduce the sum to a number between 1 and 7
+  local reduced_number=$((sum % 7))
+  if [ $reduced_number -eq 0 ]; then
+    reduced_number=7
+  fi
+
+  echo $reduced_number
+}
+
+# Use the hostname as input
+FULL_BACKUP_DAY=$(reduce_to_1_to_7 "$hostname")
+
+# Check if a command line argument is provided to override the default full backup day
+if [ $# -eq 1 ]; then
+  # Validate the provided full backup day
+  if [[ "$1" =~ ^[1-7]$ ]]; then
+    FULL_BACKUP_DAY=$1
+  else
+    echo "Error: full_backup_day must be a number from 1 to 7"
+    exit 1
+  fi
+fi
+
+# Check if backupdir is configured
+if [ -z "${BACKUP_DIR}" ]; then
+    echo "Error: Backup location must be configured!"
+    exit 1
+fi
+
+# Increase open file limit to 5000
+ulimit -n 5000
+
+# Get the current day of the week (1=Monday, 2=Tuesday, ..., 7=Sunday)
+CURRENT_DAY=$(date +%u)
+
+# Generate stats file path
+STATS_FILE="$BACKUP_DIR/stats_$(date +%Y%m%d).txt"
+
+# Function to log messages and commands output to the stats file
+log() {
+  echo "$1" | tee -a "$STATS_FILE"
+}
+
+# Function to format duration into minutes and seconds
+format_duration() {
+  local duration=$1
+  local minutes=$((duration / 60))
+  local seconds=$((duration % 60))
+  echo "${minutes} minutes and ${seconds} seconds"
+}
+
+# Function to perform a full backup
+full_backup() {
+  # Remove all files in the backup directory
+  rm -rf "$BACKUP_DIR"/*
+  log "Performing full backup..."
+  local start_time=$(date +%s)
+  # Create a new full backup with ionice
+  ionice -c2 -n7 $BACKCMD --backup $USEROPTIONS $ARGS --extra-lsndir="$BACKUP_DIR" --stream=$STREAMCMD | $GZIPCMD > "$BACKUP_DIR"/full_$(date +%Y%m%d).backup.stream.gz
+  local end_time=$(date +%s)
+  local duration=$((end_time - start_time))
+  log "Full backup completed."
+  log "Full backup duration: $(format_duration $duration)."
+}
+
+# Function to perform an incremental backup
+incremental_backup() {
+  log "Performing incremental backup..."
+  local start_time=$(date +%s)
+  # Determine the last full backup
+  LAST_FULL_BACKUP=$(ls -td "$BACKUP_DIR"/full_* | head -1)
+  log "Last full backup: $LAST_FULL_BACKUP"
+  # Create a new incremental backup based on the last full backup with ionice
+  ionice -c2 -n7 $BACKCMD --backup $USEROPTIONS $ARGS --incremental-basedir=$BACKUP_DIR --stream=$STREAMCMD | $GZIPCMD > "$BACKUP_DIR"/incr_$(date +%Y%m%d).backup.stream.gz
+  local end_time=$(date +%s)
+  local duration=$((end_time - start_time))
+  log "Incremental backup completed."
+  log "Incremental backup duration: $(format_duration $duration)."
+}
+
+# Log the start of the script execution
+log "Backup script started on $(date)."
+
+# Print the result
+log "Chosen full backup day for hostname '$hostname' is: $FULL_BACKUP_DAY"
+
+# Check if a full backup already exists
+if [ -z "$(ls -A $BACKUP_DIR/full_*.backup.stream.gz 2>/dev/null)" ]; then
+  log "No full backup found yet. First run? Performing full backup..."
+  full_backup
+else
+  # Determine whether to perform a full or incremental backup
+  if [ "$CURRENT_DAY" -eq "$FULL_BACKUP_DAY" ]; then
+    # Check if a full backup already exists for today
+    if [ -f "$BACKUP_DIR/full_$(date +%Y%m%d).backup.stream.gz" ]; then
+      log "Full backup already exists for today. Performing incremental backup..."
+      incremental_backup
+    else
+      log "Performing a weekly full backup..."
+      full_backup
+    fi
+  else
+    log "Performing an incremental backup..."
+    incremental_backup
+  fi
+fi
+
+# Log the end of the script execution
+log "Backup script finished on $(date)."
+log "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-="
