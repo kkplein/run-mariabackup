@@ -88,8 +88,9 @@ format_duration() {
 
 # Function to perform a full backup
 full_backup() {
-  # Remove all files in the backup directory
-  rm -rf "$BACKUP_DIR"/*
+  # Remove all files in the backup directory, except the current $STATS_FILE
+  #rm -rf "$BACKUP_DIR"/*
+  find "$BACKUP_DIR" -mindepth 1 ! -name "$(basename "$STATS_FILE")" -exec rm -rf {} +
   log "Performing full backup..."
   local start_time=$(date +%s)
   # Create a new full backup with ionice
