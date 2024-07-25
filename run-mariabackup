@@ -1,16 +1,28 @@
 #!/bin/bash
 
-# Define the full backup day (1=Monday, 2=Tuesday, ..., 7=Sunday)
-FULL_BACKUP_DAY=1
-MYSQL_HOST=localhost
-MYSQL_PORT=3306
+if [[ -f /etc/run-mariabackup ]]; then
+    source /etc/run-mariabackup
+else
+    echo "Error: /etc/run-mariabackup not found."
+    exit 1
+fi
 
-BACKCMD=mariabackup
-GZIPCMD=pigz  # pigz (a parallel implementation of gzip)
-STREAMCMD=mbstream
-BACKUP_DIR=""
-ARGS="--parallel=2 --galera-info"
-USEROPTIONS="--host=${MYSQL_HOST} --port=${MYSQL_PORT}"
+# /etc/run-mariabackup should look like this, but not commented out, adjust as desired:
+
+# Define the full backup day (1=Monday, 2=Tuesday, ..., 7=Sunday)
+# FULL_BACKUP_DAY=1
+# MYSQL_HOST=localhost
+# MYSQL_PORT=3306
+# 
+# BACKCMD=mariabackup
+# GZIPCMD=pigz  # pigz (a parallel implementation of gzip)
+# STREAMCMD=mbstream
+# BACKUP_DIR="/mariabackup"
+# BACKUP_DIR=""
+# ARGS="--parallel=2 --galera-info"
+# USEROPTIONS="--host=${MYSQL_HOST} --port=${MYSQL_PORT}"
+
+# end sample /etc/run-mariabackup config, below here, the actual script starts
 
 # Get the hostname of the machine
 hostname=$(hostname)
